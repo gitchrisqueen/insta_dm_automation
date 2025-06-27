@@ -1,8 +1,10 @@
+import base64
 import random
 import time
 import traceback
 
 from selenium import webdriver
+from selenium.common import TimeoutException
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
@@ -110,23 +112,25 @@ def send_message(driver, message: str, pictures: list = None):
         msg_btn = driver.find_element(By.XPATH, "//div[text()='Message']")
         msg_btn.click()
 
+        # Click the 'Next' button
+        click_not_now_button(driver)
+
         # Wait for input box to appear
         input_box = WebDriverWait(driver, 10).until(
-            EC.presence_of_element_located((By.TAG_NAME, "textarea"))
+            EC.presence_of_element_located((By.XPATH, "//div[@aria-describedby='Message']"))
         )
         # Add any pictures that might be required
         for pic in pictures or []:
-            # For the first picture click the picture icon
-            if pictures.index(pic) == 0:
-                pic_btn = driver.find_element(
-                    By.XPATH,
-                    "//div[@role='button'][.//svg[contains(@aria-label, 'Photo') or contains(@aria-label, 'Video')]]"
-                )
-                pic_btn.click()                pic_btn.click()
-                time.sleep(1)
-            else:
-                # Click the add more picture button
-                add_more_btn = driver.find_element(By.XPATH, "//div[text()='Add more']")
+            print(f"🖼️ Uploading picture: {pic}")
+            drag_and_drop_file(driver, pic, 'body')
+
+            # pic_btn = wait_for_message_photo_button(driver)
+            # pic_btn.click()
+
+            # TODO: Remove below. this is for debugging
+            input("⏸️ Check manually. Press Enter to continue...")
+
+            time.sleep(1)
 
             # Upload the picture
             upload_input = driver.find_element(By.XPATH, "//input[@type='file']")
@@ -142,6 +146,88 @@ def send_message(driver, message: str, pictures: list = None):
     except Exception as e:
         print(f"❌ Failed to send message: {e}")
         traceback.print_exc()
+
+
+def click_not_now_button(driver, timeout=10):
+    """
+    Detects and clicks the 'Not Now' button if present and visible.
+    """
+    try:
+        wait = WebDriverWait(driver, timeout)
+        button = wait.until(
+            EC.presence_of_element_located((By.XPATH, "//button[text()='Not Now']"))
+        )
+        if button.is_displayed() and button.is_enabled():
+            button.click()
+            print("✅ 'Not Now' button clicked.")
+            return True
+        else:
+            print("⚠️ 'Not Now' button found but not visible/enabled.")
+            return False
+    except TimeoutException:
+        print("ℹ️ 'Not Now' button not found.")
+        return False
+
+
+def wait_for_message_photo_button(driver, timeout=10):
+    try:
+        wait = WebDriverWait(driver, timeout)
+        element = wait.until(EC.presence_of_element_located((
+            By.XPATH,
+            "//div[@role='button'][.//svg[contains(@aria-label, 'Photo') or contains(@aria-label, 'Video')]]"
+        )))
+        print("✅ Found story overlay element.")
+        return element
+    except Exception as e:
+        print(f"❌ SVG element didn't appear in {timeout}s: {e}")
+        return None
+
+
+def drag_and_drop_file(driver, file_path, target_selector):
+    with open(file_path, "rb") as f:
+        file_content = f.read()
+    file_name = file_path.split("/")[-1]
+    file_b64 = base64.b64encode(file_content).decode("utf-8")
+
+    js = """
+    var target = document.querySelector(arguments[0]);
+    var b64Data = arguments[1];
+    var fileName = arguments[2];
+
+    function b64toBlob(b64Data, contentType='application/octet-stream', sliceSize=512) {
+        var byteCharacters = atob(b64Data);
+        var byteArrays = [];
+        for (var offset = 0; offset < byteCharacters.length; offset += sliceSize) {
+            var slice = byteCharacters.slice(offset, offset + sliceSize);
+            var byteNumbers = new Array(slice.length);
+            for (var i = 0; i < slice.length; i++) {
+                byteNumbers[i] = slice.charCodeAt(i);
+            }
+            var byteArray = new Uint8Array(byteNumbers);
+            byteArrays.push(byteArray);
+        }
+        return new Blob(byteArrays, {type: contentType});
+    }
+
+    var blob = b64toBlob(b64Data);
+    var file = new File([blob], fileName);
+    var dataTransfer = new DataTransfer();
+    dataTransfer.items.add(file);
+
+    function triggerEvent(type) {
+        var event = new DragEvent(type, {
+            dataTransfer: dataTransfer,
+            bubbles: true,
+            cancelable: true
+        });
+        target.dispatchEvent(event);
+    }
+
+    triggerEvent('dragenter');
+    triggerEvent('dragover');
+    triggerEvent('drop');
+    """
+    driver.execute_script(js, target_selector, file_b64, file_name)
 
 
 def send_message_via_story(driver, message: str):
